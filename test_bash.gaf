@@ -1,0 +1,5 @@
+[M::main::0.103*1.08] loaded the graph from "partition_0.gfa"
+[M::Cyclicity] Graph is Acyclic
+[M::MPC] range MPC [1-18] 
+[M::mg_index::0.843*1.23] indexed the graph
+[M::mg_opt_update::0.892*1.22] occ_max1=109; lc_max_occ=2

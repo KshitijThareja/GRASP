@@ -1,0 +1,5 @@
+[M::main::0.051*1.07] loaded the graph from "yeast_pangenome_final.gfa"
+[M::Cyclicity] Graph is Acyclic
+[M::MPC] range MPC [1-18] 
+[M::mg_index::0.737*1.26] indexed the graph
+[M::mg_opt_update::0.786*1.24] occ_max1=109; lc_max_occ=2

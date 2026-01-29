@@ -4,7 +4,7 @@
 
 By leveraging hierarchical graph partitioning and distributed processing, GRASP enables the analysis of complex, terabyte-scale pangenomes on standard hardware, making pangenomics accessible to a wider research community.
 
-## 🚀 Key Features
+## Key Features
 
 *   **Scalable Partitioning:** Uses **METIS** to intelligently divide large graphs into balanced, manageable subgraphs (partitions), drastically reducing memory footprint.
 *   **Parallel Execution:** Distributes the alignment workload across multiple cores or nodes. Each partition is processed independently.
@@ -12,7 +12,7 @@ By leveraging hierarchical graph partitioning and distributed processing, GRASP 
 *   **Smart Read Dispatching:** A minimizer-based global index routes reads to the specific partition(s) most likely to contain the correct alignment.
 *   **Standard Output:** Produces alignments in the standard **GAF (Graph Alignment Format)**.
 
-## 🛠️ Prerequisites
+## Prerequisites
 
 Before building GRASP, ensure you have the following dependencies installed:
 
@@ -22,7 +22,7 @@ Before building GRASP, ensure you have the following dependencies installed:
 *   **GKlib:** A library used by METIS (`libgklib`).
 *   **GNU Make:** For building the project.
 
-## 📦 Installation
+## Installation
 
 1.  **Clone the repository:**
     ```bash
@@ -36,7 +36,7 @@ Before building GRASP, ensure you have the following dependencies installed:
     ```
     This will compile the executable (currently named `PanAligner`).
 
-## 💻 Usage
+## Usage
 
 GRASP supports two modes of operation: **Standard (Monolithic)** and **Parallel (Partitioned)**.
 
@@ -78,7 +78,7 @@ For smaller graphs that fit in memory, you can run GRASP as a standard single-pr
 *   `-c`: Generate CIGAR string in output.
 *   `--partition`: (Internal flag) Triggers the partitioning and dispatching phase.
 
-## 🧩 Architecture Overview
+## Architecture Overview
 
 GRASP operates in three stages:
 
@@ -95,7 +95,7 @@ GRASP operates in three stages:
 3.  **Merging:**
     *   Results from all workers are aggregated into a single, consistent GAF file.
 
-## 📄 Output Format
+## Output Format
 The output follows the **GAF (Graph Alignment Format)** specification:
 ```text
 QueryName  QueryLen  QueryStart  QueryEnd  Strand  Path  PathLen  PathStart  PathEnd  Matches  BlockLen  MapQ  ...

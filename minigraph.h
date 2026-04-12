@@ -75,6 +75,8 @@ typedef struct {
 	int ref_bonus;
 	int64_t cap_kalloc;
 	int min_cov_mapq, min_cov_blen;
+	int nparts;       // number of partitions K for METIS (--nparts)
+	int halo_depth;   // BFS halo expansion depth d (--halo-depth)
 } mg_mapopt_t;
 
 typedef struct {

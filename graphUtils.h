@@ -22,9 +22,11 @@
 #include <climits>
 #include <assert.h>
 #include <set>
+#include <unordered_set>
 #include <utility>
 #include <fstream>
 #include <functional>
+#include <inttypes.h>
 #include <metis.h>
 
 
@@ -127,11 +129,13 @@ class graphUtils
 
     void Connected_components();
 
-    void partition_components(int threshold);
+    void partition_components(int threshold, int nparts);
 
-    void identify_halo_nodes();
+    void identify_halo_nodes(int depth);
 
-    void generate_partition_files(const char *prefix);
+    void generate_partition_files(const char *prefix, int depth);
+
+    double cut_edge_fraction = 0.0; // fraction of edges crossing partition boundaries
 
     // Global Indexing
     std::map<uint64_t, int> global_idx; // Minimizer -> Partition ID

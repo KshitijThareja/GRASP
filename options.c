@@ -43,6 +43,8 @@ void mg_mapopt_init(mg_mapopt_t *mo)
 	mo->min_cov_mapq = 20;
 	mo->min_cov_blen = 1000;
 	mo->cap_kalloc = 1000000000;
+	mo->nparts = 4;
+	mo->halo_depth = 1;
 }
 
 void mg_ggopt_init(mg_ggopt_t *go)

@@ -13,21 +13,13 @@ fi
 
 export LD_LIBRARY_PATH=/home/kshitij/local/lib:$LD_LIBRARY_PATH
 
-# Initial check for partitions (this variable will be updated later)
-PARTITIONS=$(ls partition_*.gfa 2>/dev/null)
+echo "[Pipeline] Step 1: Partitioning Graph and Dispatching Reads..."
+# Run PanAligner in Partition Mode
+./PanAligner --partition -t $THREADS $GFA $READS > /dev/null 2>&1
 
-echo "[Pipeline] Step 1: Checking for existing partitions..."
-# Check if partitions and dispatch files already exist
-if ls partition_*.gfa 1> /dev/null 2>&1 && ls reads_part_*.fq 1> /dev/null 2>&1; then
-    echo "[Pipeline] Partitions and read files already exist. Skipping partitioning step to save I/O overhead."
-else
-    echo "[Pipeline] Partitions not found. Running PanAligner to Partition Graph and Dispatch Reads..."
-    # Run PanAligner in Partition Mode
-    ./PanAligner --partition -t $THREADS $GFA $READS > /dev/null 2>&1
-    echo "[Pipeline] Step 1 Complete. Checking for generated partitions..."
-fi
+echo "[Pipeline] Step 1 Complete. Checking for partitions..."
 
-# Find all partition GFA files again, regardless of whether partitioning was run or skipped
+# Find all partition GFA files
 PARTITIONS=$(ls partition_*.gfa 2>/dev/null)
 
 if [ -z "$PARTITIONS" ]; then
@@ -48,7 +40,7 @@ run_alignment() {
     if [ -f "$reads_fq" ]; then
         echo "[Aligner] Processing Partition $pid with $reads_fq..."
         # Run in Normal Mode (no --partition)
-        ./PanAligner -cx lr -t 2 $part_gfa $reads_fq > "alignment_part_${pid}.gaf" 2> "log_part_${pid}.txt"
+        ./PanAligner -c -t 2 $part_gfa $reads_fq > "alignment_part_${pid}.gaf" 2> "log_part_${pid}.txt"
     else
         echo "[Aligner] No reads for Partition $pid. Skipping."
     fi

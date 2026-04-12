@@ -62,6 +62,8 @@ static ko_longopt_t long_options[] = {
 	{ "dbg-mwf-long", ko_no_argument,       408 },
 	{ "dbg-mwf-seq",  ko_no_argument,       409 },
 	{ "partition",    ko_no_argument,       500 },
+	{ "nparts",       ko_required_argument, 501 },
+	{ "halo-depth",   ko_required_argument, 502 },
 	{ 0, 0, 0 }
 };
 
@@ -186,6 +188,8 @@ int main(int argc, char *argv[])
 		else if (c == 408) mg_dbg_flag |= MG_DBG_MINIWFA;     // --dbg-mwf-long
 		else if (c == 409) mg_dbg_flag |= MG_DBG_MWF_SEQ;     // --dbg-mwf-seq
 		else if (c == 500) opt.flag |= MG_M_PARTITION;       // --partition
+		else if (c == 501) opt.nparts = atoi(o.arg);          // --nparts
+		else if (c == 502) opt.halo_depth = atoi(o.arg);      // --halo-depth
 		else if (c == 'U') {
 			opt.occ_max1 = (int)mm_parse_num2(o.arg, &s);
 			if (*s == ',') opt.occ_max1_cap = (int)mm_parse_num2(s + 1, &s);

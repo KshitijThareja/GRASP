@@ -2382,138 +2382,240 @@ std::vector<mg128_t> graphUtils::Chaining(std::vector<mg128_t> anchors)
 
 }
 
-void graphUtils::partition_components(int threshold)
+void graphUtils::partition_components(int threshold, int nparts)
 {
-    fprintf(stderr, "[M::partition] Starting graph partitioning with threshold %d. this=%p\n", threshold, this);
-    fprintf(stderr, "[M::partition] num_cid=%zu\n", num_cid);
-    fprintf(stderr, "conn_comp.size()=%zu, capacity=%zu, data=%p\n", conn_comp.size(), conn_comp.capacity(), conn_comp.data());
+    std::cerr << "[M::partition] Partitioning into K=" << nparts << " parts (threshold=" << threshold << ")" << std::endl;
     int partitioned_count = 0;
 
     for (size_t cid = 0; cid < num_cid; cid++)
     {
         int comp_size = conn_comp[cid].size();
         if (comp_size <= threshold) {
-            // Assign partitions round-robin to small components to ensure distribution
-            int p_id = cid % 4; // Distribute across 4 partitions (arbitrary number for testing)
-            for (auto global_id : conn_comp[cid]) {
-                g->seg[global_id >> 1].partition_id = p_id;
+            // Distribute small components round-robin across partitions
+            for (size_t j = 0; j < conn_comp[cid].size(); ++j) {
+                g->seg[conn_comp[cid][j] >> 1].partition_id = j % nparts;
             }
             continue;
         }
 
         partitioned_count++;
-        fprintf(stderr, "[M::partition] Partitioning component %zu with %d nodes.\n", cid, comp_size);
 
-        // Prepare CSR format for METIS
+        // Prepare CSR format for METIS.
+        // adj_cc is a DAG (directed); METIS_PartGraphKway requires a symmetric
+        // (undirected) adjacency.  Symmetrize here: for every directed edge
+        // u->v also add v->u, then deduplicate, and drop self-loops.
         idx_t nvtxs = comp_size;
         idx_t ncon = 1;
         std::vector<idx_t> xadj(nvtxs + 1);
         std::vector<idx_t> adjncy;
-        
-        // We need to map local component indices to CSR
-        // adj_cc[cid] contains adjacency list with local indices
-        
-        xadj[0] = 0;
+
+        // Build symmetric neighbour sets
+        std::vector<std::unordered_set<int>> sym(nvtxs);
         for (int i = 0; i < nvtxs; ++i) {
-            for (auto neighbor : adj_cc[cid][i]) {
-                adjncy.push_back(neighbor);
+            for (auto nb : adj_cc[cid][i]) {
+                if (nb == i) continue;          // skip self-loops
+                sym[i].insert(nb);
+                sym[nb].insert(i);
             }
-            xadj[i+1] = adjncy.size();
         }
 
-        idx_t nparts = 2; // Start with 2 partitions, or calculate based on size
-        if (comp_size > 10000) nparts = 4; // Simple heuristic
-        if (comp_size > 100000) nparts = 8;
+        xadj[0] = 0;
+        for (int i = 0; i < nvtxs; ++i) {
+            for (int nb : sym[i]) {
+                adjncy.push_back((idx_t)nb);
+            }
+            xadj[i+1] = (idx_t)adjncy.size();
+        }
+
+        // Clamp nparts to [2, comp_size] – METIS requires nparts <= nvtxs
+        idx_t k = (idx_t)nparts;
+        if (k < 2) k = 2;
+        if (k > nvtxs) k = nvtxs;
 
         std::vector<idx_t> part(nvtxs);
         idx_t objval;
-        
-        // METIS options
-        idx_t options[METIS_NOPTIONS];
-        METIS_SetDefaultOptions(options);
-        options[METIS_OPTION_SEED] = 42;
 
-        int ret = METIS_PartGraphKway(&nvtxs, &ncon, xadj.data(), adjncy.data(), 
-                                      NULL, NULL, NULL, &nparts, NULL, NULL, options, &objval, part.data());
+        idx_t options_m[METIS_NOPTIONS];
+        METIS_SetDefaultOptions(options_m);
+        options_m[METIS_OPTION_SEED] = 42;
+
+        int ret = METIS_PartGraphKway(&nvtxs, &ncon, xadj.data(), adjncy.data(),
+                                      NULL, NULL, NULL, &k, NULL, NULL, options_m, &objval, part.data());
 
         if (ret != METIS_OK) {
             std::cerr << "[E::partition] METIS failed for component " << cid << std::endl;
-            // Fallback: assign 0
             for (auto global_id : conn_comp[cid]) {
                 g->seg[global_id >> 1].partition_id = 0;
             }
         } else {
-            // Assign partition IDs back to graph segments
             for (int i = 0; i < nvtxs; ++i) {
-                int global_id = conn_comp[cid][i]; // Use conn_comp instead of component_idx
-                g->seg[global_id >> 1].partition_id = part[i];
+                g->seg[conn_comp[cid][i] >> 1].partition_id = part[i];
             }
-            std::cerr << "[M::partition] Component " << cid << " partitioned into " << nparts << " parts. Cut: " << objval << std::endl;
+            std::cerr << "[M::partition] Component " << cid << " (size=" << comp_size
+                      << ") -> " << k << " parts, cut=" << objval << std::endl;
         }
     }
-    std::cerr << "[M::partition] Partitioning complete. Partitioned " << partitioned_count << " components." << std::endl;
+    std::cerr << "[M::partition] Done. Partitioned " << partitioned_count << " large components." << std::endl;
 }
 
-void graphUtils::identify_halo_nodes()
+void graphUtils::identify_halo_nodes(int depth)
 {
-    std::cerr << "[M::halo] Identifying halo nodes..." << std::endl;
-    int halo_count = 0;
-    
-    // Iterate over all segments
+    // --- Pass 1: identify boundary nodes and compute cut-edge fraction ---
+    std::vector<bool> is_boundary(g->n_seg, false);
+    int64_t total_edges = 0, cut_edges = 0;
+
     for (uint32_t v = 0; v < n_vtx; ++v) {
         int seg_id = v >> 1;
         int my_part = g->seg[seg_id].partition_id;
-        
-        int n_edges = gfa_arc_n(g, v);
+        int ne = gfa_arc_n(g, v);
         gfa_arc_t *av = gfa_arc_a(g, v);
-        
-        for (int i = 0; i < n_edges; ++i) {
-            uint32_t w = av[i].w;
-            int neighbor_seg_id = w >> 1;
-            int neighbor_part = g->seg[neighbor_seg_id].partition_id;
-            
-            if (my_part != neighbor_part) {
-                // Boundary detected!
-                if (!g->seg[seg_id].is_halo) {
-                    g->seg[seg_id].is_halo = 1;
-                    halo_count++;
-                }
-                if (!g->seg[neighbor_seg_id].is_halo) {
-                    g->seg[neighbor_seg_id].is_halo = 1;
-                    halo_count++;
+        for (int i = 0; i < ne; ++i) {
+            int nb_seg = av[i].w >> 1;
+            total_edges++;
+            if (g->seg[nb_seg].partition_id != my_part) {
+                cut_edges++;
+                is_boundary[seg_id] = true;
+                is_boundary[nb_seg]  = true;
+            }
+        }
+    }
+    // Each undirected edge is represented twice (both directions)
+    total_edges /= 2;
+    cut_edges   /= 2;
+    cut_edge_fraction = (total_edges > 0) ? (double)cut_edges / total_edges : 0.0;
+    fprintf(stderr, "[M::halo] Cut edges: %" PRId64 " / %" PRId64 " (%.2f%%)\n",
+            cut_edges, total_edges, 100.0 * cut_edge_fraction);
+
+    if (depth == 0) {
+        fprintf(stderr, "[M::halo] depth=0 → no halo nodes.\n");
+        return;
+    }
+
+    // --- Pass 2: BFS from boundary nodes to depth d ---
+    std::queue<std::pair<int,int>> bfs_q;  // (seg_id, current_depth)
+    std::vector<bool> visited(g->n_seg, false);
+
+    for (uint32_t i = 0; i < g->n_seg; ++i) {
+        if (is_boundary[i]) {
+            visited[i] = true;
+            bfs_q.push({(int)i, 0});
+        }
+    }
+
+    int halo_count = 0;
+    while (!bfs_q.empty()) {
+        auto [seg_id, d] = bfs_q.front(); bfs_q.pop();
+        g->seg[seg_id].is_halo = 1;
+        halo_count++;
+
+        if (d < depth) {
+            for (int dir = 0; dir < 2; ++dir) {
+                uint32_t v = ((uint32_t)seg_id << 1) | dir;
+                int ne = gfa_arc_n(g, v);
+                gfa_arc_t *av = gfa_arc_a(g, v);
+                for (int i = 0; i < ne; ++i) {
+                    int nb = av[i].w >> 1;
+                    if (!visited[nb]) {
+                        visited[nb] = true;
+                        bfs_q.push({nb, d + 1});
+                    }
                 }
             }
         }
     }
-    std::cerr << "[M::halo] Identified " << halo_count << " halo nodes." << std::endl;
+    fprintf(stderr, "[M::halo] Marked %d halo nodes (depth=%d)\n", halo_count, depth);
 }
 
-void graphUtils::generate_partition_files(const char *prefix)
+// Write subgraph induced by node_set to fp (S + L lines).
+static void write_gfa_subgraph(const gfa_t *g, FILE *fp,
+                                const std::unordered_set<uint32_t> &node_set)
 {
-    // Find max partition id
-    int max_pid = 0;
-    for (uint32_t i = 0; i < g->n_seg; ++i) {
-        if (g->seg[i].partition_id > max_pid) {
-            max_pid = g->seg[i].partition_id;
+    // S-lines
+    for (uint32_t seg_id : node_set) {
+        const gfa_seg_t *s = &g->seg[seg_id];
+        if (s->del) continue;
+        fprintf(fp, "S\t%s\t", s->name);
+        if (s->seq) fputs(s->seq, fp);
+        else        fputc('*', fp);
+        fprintf(fp, "\tLN:i:%d", s->len);
+        if (s->snid >= 0 && s->soff >= 0)
+            fprintf(fp, "\tSN:Z:%s\tSO:i:%d", g->sseq[s->snid].name, s->soff);
+        if (s->rank >= 0)
+            fprintf(fp, "\tSR:i:%d", s->rank);
+        fprintf(fp, "\tpt:i:%d", s->partition_id);
+        if (s->is_halo) fprintf(fp, "\thl:i:1");
+        fputc('\n', fp);
+    }
+    // L-lines: print edge if both endpoints are in node_set
+    for (uint32_t seg_id : node_set) {
+        const gfa_seg_t *s = &g->seg[seg_id];
+        if (s->del) continue;
+        for (int dir = 0; dir < 2; ++dir) {
+            uint32_t v = (seg_id << 1) | dir;
+            int ne = gfa_arc_n(g, v);
+            gfa_arc_t *av = gfa_arc_a(g, v);
+            for (int i = 0; i < ne; ++i) {
+                if (av[i].del) continue;
+                uint32_t w_seg = av[i].w >> 1;
+                if (node_set.count(w_seg) == 0) continue;
+                int ov = av[i].ov < av[i].ow ? av[i].ov : av[i].ow;
+                fprintf(fp, "L\t%s\t%c\t%s\t%c\t%dM\n",
+                        g->seg[seg_id].name, "+-"[v & 1],
+                        g->seg[w_seg].name,  "+-"[av[i].w & 1], ov);
+            }
         }
     }
-    
-    std::cerr << "[M::output] Generating " << max_pid + 1 << " partition files..." << std::endl;
-    
+}
+
+void graphUtils::generate_partition_files(const char *prefix, int depth)
+{
+    int max_pid = 0;
+    for (uint32_t i = 0; i < g->n_seg; ++i)
+        if (g->seg[i].partition_id > max_pid)
+            max_pid = g->seg[i].partition_id;
+
+    fprintf(stderr, "[M::output] Generating %d partition files (depth=%d)...\n",
+            max_pid + 1, depth);
+
     for (int pid = 0; pid <= max_pid; ++pid) {
-        char filename[256];
-        sprintf(filename, "%s_%d.gfa", prefix, pid);
+        // BFS from core nodes of this partition to depth d
+        std::unordered_set<uint32_t> node_set;
+        std::queue<std::pair<uint32_t,int>> bfs_q;  // (seg_id, depth_remaining)
+
+        for (uint32_t i = 0; i < g->n_seg; ++i) {
+            if (!g->seg[i].del && g->seg[i].partition_id == pid) {
+                if (node_set.insert(i).second)
+                    bfs_q.push({i, depth});
+            }
+        }
+
+        while (!bfs_q.empty()) {
+            auto [seg_id, rem] = bfs_q.front(); bfs_q.pop();
+            if (rem <= 0) continue;
+            for (int dir = 0; dir < 2; ++dir) {
+                uint32_t v = (seg_id << 1) | dir;
+                int ne = gfa_arc_n(g, v);
+                gfa_arc_t *av = gfa_arc_a(g, v);
+                for (int i = 0; i < ne; ++i) {
+                    uint32_t nb = av[i].w >> 1;
+                    if (!g->seg[nb].del && node_set.insert(nb).second)
+                        bfs_q.push({nb, rem - 1});
+                }
+            }
+        }
+
+        char filename[512];
+        snprintf(filename, sizeof(filename), "%s_%d.gfa", prefix, pid);
         FILE *fp = fopen(filename, "w");
         if (!fp) {
-            std::cerr << "[E::output] Cannot open file " << filename << " for writing." << std::endl;
+            fprintf(stderr, "[E::output] Cannot open %s\n", filename);
             continue;
         }
-        
-        gfa_print_partition(g, fp, pid);
-        
+        write_gfa_subgraph(g, fp, node_set);
         fclose(fp);
+        fprintf(stderr, "[M::output] Partition %d: %zu nodes written.\n", pid, node_set.size());
     }
-    std::cerr << "[M::output] Partition files generated." << std::endl;
+    fprintf(stderr, "[M::output] Partition files generated.\n");
 }
 
 
@@ -2527,7 +2629,7 @@ void graphUtils::build_global_index(int k, int w)
         if (s->del || s->len < k) continue;
         
         int partition_id = s->partition_id;
-        // if (partition_id == 0) continue; // Partition 0 is valid!
+        // if (partition_id == 0) continue; // Partition 0 is valid
         // fprintf(stderr, "Seg %d Part %d\n", i, partition_id); 
         
         mg128_v mini = {0,0,0};
@@ -2535,7 +2637,7 @@ void graphUtils::build_global_index(int k, int w)
         mg_sketch(0, s->seq, s->len, w, k, i, &mini);
         
         for (size_t j = 0; j < mini.n; ++j) {
-            // mini.a[j].x contains the hash in the upper bits? 
+            // mini.a[j].x contains the hash in the upper bits
             // mg_sketch: p->a[i].x = kMer<<8 | kmerSpan
             // We use the kMer part as the key.
             uint64_t kmer_hash = mini.a[j].x >> 8;
@@ -2630,7 +2732,6 @@ void graphUtils::write_read_to_partition(int pid, const char *name, const char *
     if (qual && qual[0] != '\0') {
         fprintf(fp, "@%s\n%s\n+\n%s\n", name, seq, qual);
     } else {
-        // fprintf(stderr, "Writing FASTA for %s\n", name);
         fprintf(fp, ">%s\n%s\n", name, seq);
     }
     funlockfile(fp);

@@ -242,10 +242,10 @@ mg_idx_t *mg_index(gfa_t *g, const mg_idxopt_t *io, int n_threads, mg_mapopt_t *
 	// graphOp->print_graph();
 	graphOp->Connected_components();
 	if (mo->flag & MG_M_PARTITION) {
-		graphOp->partition_components(10); // Partition components larger than 10 nodes
-		graphOp->identify_halo_nodes();
-		graphOp->generate_partition_files("partition");
-		graphOp->build_global_index(15, 10); // Build global index with k=15, w=10
+		graphOp->partition_components(10, mo->nparts);
+		graphOp->identify_halo_nodes(mo->halo_depth);
+		graphOp->generate_partition_files("partition", mo->halo_depth);
+		graphOp->build_global_index(15, 10);
 		graphOp->open_partition_read_files("reads_part");
 	}
 	int cycle_count = graphOp->is_cyclic();
